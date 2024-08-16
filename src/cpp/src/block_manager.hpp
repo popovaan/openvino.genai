@@ -20,7 +20,7 @@ public:
     using Ptr = std::shared_ptr<KVCacheBlock>;
     using CPtr = std::shared_ptr<const KVCacheBlock>;
 
-    explicit KVCacheBlock(int index)
+    KVCacheBlock(int index)
         : m_ref_count(0),
           m_index(index),
           m_timestamp(std::chrono::system_clock::now()) { }
@@ -70,9 +70,32 @@ public:
 
 class Evictor {
     std::map<size_t, KVCacheBlock::Ptr> m_blocks;
+    
+    struct
+    {
+        bool operator()(const KVCacheBlock::Ptr l, const KVCacheBlock::Ptr r) const { return l->get_timestamp() < r->get_timestamp() && l->get_hash() != r->get_hash(); }
+    } CacheBlockIsLess;
+    std::set<KVCacheBlock::Ptr, decltype(CacheBlockIsLess)> m_blocks_set;
     public:
+    std::chrono::nanoseconds lru_get_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds get_block_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds add_time = std::chrono::nanoseconds::zero();
     void add(KVCacheBlock::Ptr block) {
+        auto start = std::chrono::system_clock::now();
+      //  OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
+        //auto it = m_blocks.find(block->get_hash());
         m_blocks[block->get_hash()] = block;
+        // if (it == m_blocks.end()) {
+        //     m_blocks[block->get_hash()] = block;
+        //   //  m_blocks_set.insert(block);  
+        // }
+        auto end = std::chrono::system_clock::now();
+        add_time += end - start;
+      //  OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
+    }
+
+    static bool block_is_less(const std::pair<size_t, KVCacheBlock::Ptr>& lhs, const std::pair<size_t, KVCacheBlock::Ptr>& rhs) {
+        return lhs.second->get_timestamp() < rhs.second->get_timestamp();
     }
 
     KVCacheBlock::Ptr get_block(size_t hash) {
@@ -81,22 +104,56 @@ class Evictor {
         {
             return nullptr;
         }
+       // OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
+        auto start = std::chrono::system_clock::now();
+
         KVCacheBlock::Ptr block = it->second;
         block->set_timestamp(std::chrono::system_clock::now());
         block->increment();
         m_blocks.erase(it);
+
+        // KVCacheBlock::Ptr block = it->second;
+        // m_blocks.erase(it);
+        // m_blocks_set.erase(it->second);
+        auto end = std::chrono::system_clock::now();
+        // block->set_timestamp(std::chrono::system_clock::now());
+        // block->increment();
+        get_block_time += end - start;
+      //  OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
         return block;
+    }
+
+    void update_timestamp(KVCacheBlock::Ptr block, std::chrono::time_point<std::chrono::system_clock> timestamp) {
+       // OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
+      //  m_blocks_set.erase(block);
+        block->set_timestamp(timestamp);
+       // m_blocks_set.emplace(block);
+       // OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
     }
 
     KVCacheBlock::Ptr get_lru_block() {
         if (!m_blocks.size()) {
             return nullptr;
         }
+      //  OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
+        auto start = std::chrono::system_clock::now();
+        //std::cout << "get_lru_block!" << std::endl;
+
         auto hash_block = std::min_element(std::begin(m_blocks), std::end(m_blocks), [](const auto& lhs, const auto& rhs) -> bool { return lhs.second->get_timestamp() < rhs.second->get_timestamp(); });
         auto block = hash_block->second;
         block->set_timestamp(std::chrono::system_clock::now());
         block->increment();
         m_blocks.erase(hash_block->first);
+
+        // auto block_it = m_blocks_set.begin();
+        // auto block = *block_it;
+        // m_blocks_set.erase(block_it);
+        // block->set_timestamp(std::chrono::system_clock::now());
+        // block->increment();
+        // m_blocks.erase(block->get_hash());
+        // auto end = std::chrono::system_clock::now();
+        // lru_get_time += end - start;
+       // OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
         return block;
     }
 
@@ -110,12 +167,19 @@ class BlockAllocator {
     ov::genai::Evictor m_evictor;
     int m_total_num_blocks;
     bool m_enable_prefix_caching;
+
 public:
     BlockAllocator(int num_blocks, bool enable_prefix_caching) :
         m_total_num_blocks(num_blocks), m_enable_prefix_caching(enable_prefix_caching) {
         for (int block_id = 0; block_id < m_total_num_blocks; ++block_id) {
             m_free_blocks.push_back(std::make_shared<KVCacheBlock>(block_id));
         }
+    }
+
+    void print_lru_time() {
+        std::cout <<  "get_lru_block time: " << std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(m_evictor.lru_get_time).count()) << " ms" << std::endl;
+        std::cout <<  "get_block time: " << std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(m_evictor.get_block_time).count()) << " ms" << std::endl;
+        std::cout <<  "add time: " << std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(m_evictor.add_time).count()) << " ms" << std::endl;
     }
 
     ~BlockAllocator() {
@@ -237,6 +301,10 @@ public:
     const std::vector<KVCacheBlock::Ptr>& get_block_table(uint64_t seq_id) {
         OPENVINO_ASSERT(m_block_table.count(seq_id) == 1);
         return m_block_table[seq_id];
+    }
+
+    void print_time() {
+        m_allocator.print_lru_time();
     }
 
     const size_t free_group_partially(SequenceGroup::Ptr sequence_group, size_t num_required_blocks) {
@@ -492,7 +560,7 @@ public:
             auto full_block_hash = sequence->get_hash(content_len);
             auto block = m_allocator.get_cached_block(full_block_hash, cached_blocks);
             if (block != nullptr) {
-                block->set_timestamp(std::chrono::system_clock::now());
+              //  block->set_timestamp(std::chrono::system_clock::now());
                 m_block_table[seq_id].push_back(block);
                 group->update_processed_tokens_num(content_len);
             }
@@ -505,7 +573,7 @@ public:
                     auto hash = sequence->get_hash(prev_iteration_content_len + i);
                     auto block = m_allocator.get_cached_block(hash, cached_blocks);
                     if (block != nullptr) {
-                        block->set_timestamp(std::chrono::system_clock::now());
+                        //block->set_timestamp(std::chrono::system_clock::now());
                         group->update_processed_tokens_num(prev_iteration_content_len + i);
 
                         size_t new_tokens_count_in_block = std::min(content_len, prev_iteration_content_len + block_size);
