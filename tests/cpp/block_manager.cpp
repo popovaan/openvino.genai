@@ -8,6 +8,7 @@
 #include "openvino/genai/generation_config.hpp"
 #include "sequence_group.hpp"
 #include "scheduler.hpp"
+#include "prefix_tree.hpp"
 
 TEST(TestBlockManager, general_test) {
     ov::genai::BlockManager bm = ov::genai::BlockManager(6, false, 4);
@@ -80,3 +81,33 @@ TEST(TestBlockManager, required_blocks_count) {
     EXPECT_EQ(required_blocks, 5);
     EXPECT_FALSE(bm.can_append_slots(sequence_group));
 }
+// using namespace ov::genai;
+// TEST(TestBlockManager, test_tree) {
+//      // Driver program for the Trie Data Structure Operations
+//     TrieNode* root = make_trienode('\0');
+//     root = insert_trie(root, "hello");
+//     root = insert_trie(root, "hi");
+//     root = insert_trie(root, "teabag");
+//     root = insert_trie(root, "teacan");
+//     print_search(root, "tea");
+//     print_search(root, "teabag");
+//     print_search(root, "teacan");
+//     print_search(root, "hi");
+//     print_search(root, "hey");
+//     print_search(root, "hello");
+//     auto node = get_trie(root, "hello");
+//     auto k = get_trie(root, "teabag");
+//     auto b = k == NULL;
+//     print_trie(root);
+//     printf("\n");
+//     root = delete_trie(root, "hello");
+//     printf("After deleting 'hello'...\n");
+//     print_trie(root);
+//     printf("\n");
+//     root = delete_trie(root, "teacan");
+//     printf("After deleting 'teacan'...\n");
+//     print_trie(root);
+//     printf("\n");
+//     free_trienode(root);
+
+// }

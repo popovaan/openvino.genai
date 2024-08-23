@@ -9,99 +9,68 @@
 #include <chrono>
 
 #include "sequence_group.hpp"
+#include "prefix_tree.hpp"
 
 namespace ov::genai {
-class KVCacheBlock {
-    int m_ref_count;
-    int m_index;
-    size_t m_hash;
-    std::chrono::time_point<std::chrono::system_clock> m_timestamp;
-public:
-    using Ptr = std::shared_ptr<KVCacheBlock>;
-    using CPtr = std::shared_ptr<const KVCacheBlock>;
-
-    explicit KVCacheBlock(int index)
-        : m_ref_count(0),
-          m_index(index),
-          m_timestamp(std::chrono::system_clock::now()) { }
-
-    int get_index() const {
-        return m_index;
-    }
-
-    bool is_free() const {
-        return m_ref_count == 0;
-    }
-
-    void increment() {
-        ++m_ref_count;
-    }
-
-    void release() {
-        OPENVINO_ASSERT(m_ref_count > 0);
-        --m_ref_count;
-    }
-
-    bool copy_on_write() const {
-        return m_ref_count > 1;
-    }
-
-    int get_references_count() const {
-        return m_ref_count;
-    }
-
-    size_t get_hash() const {
-        return m_hash;
-    }
-
-    void set_hash(size_t hash) {
-        m_hash = hash;
-    }
-
-    void set_timestamp(const std::chrono::time_point<std::chrono::system_clock>& timestamp) {
-        m_timestamp = timestamp;
-    }
-
-    std::chrono::time_point<std::chrono::system_clock> get_timestamp() {
-        return m_timestamp;
-    }
-};
-
 
 class Evictor {
-    std::map<size_t, KVCacheBlock::Ptr> m_blocks;
+    
+    struct
+    {
+        bool operator()(const KVCacheBlock::Ptr l, const KVCacheBlock::Ptr r) const { return l->get_timestamp() < r->get_timestamp(); }
+    } CacheBlockIsLess;
+    std::set<KVCacheBlock::Ptr, decltype(CacheBlockIsLess)> m_blocks_set;
+    TrieNode* evictor_tree;
     public:
+    Evictor() {
+        evictor_tree = make_trienode('\0');
+    }
     void add(KVCacheBlock::Ptr block) {
-        m_blocks[block->get_hash()] = block;
+        m_blocks_set.insert(block);  
+        insert_to_prefix_tree(evictor_tree, block->prompt_ids, block->generated_ids, block);
     }
 
-    KVCacheBlock::Ptr get_block(size_t hash) {
-        auto it = m_blocks.find(hash);
-        if (it == m_blocks.end())
+    static bool block_is_less(const std::pair<size_t, KVCacheBlock::Ptr>& lhs, const std::pair<size_t, KVCacheBlock::Ptr>& rhs) {
+        return lhs.second->get_timestamp() < rhs.second->get_timestamp();
+    }
+
+    KVCacheBlock::Ptr get_block(const ov::genai::TokenIds& prompt_ids, size_t content_len) {
+        auto block = get_from_prefix_tree(evictor_tree, prompt_ids, {}, content_len);
+        if (block == nullptr)
         {
             return nullptr;
         }
-        KVCacheBlock::Ptr block = it->second;
+        m_blocks_set.erase(block);
         block->set_timestamp(std::chrono::system_clock::now());
         block->increment();
-        m_blocks.erase(it);
+        delete_trie(evictor_tree, block->get_content().data(), block->get_size());
         return block;
     }
 
+    void update_timestamp(KVCacheBlock::Ptr block, std::chrono::time_point<std::chrono::system_clock> timestamp) {
+       // OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
+      //  m_blocks_set.erase(block);
+        block->set_timestamp(timestamp);
+       // m_blocks_set.emplace(block);
+       // OPENVINO_ASSERT(m_blocks.size() == m_blocks_set.size());
+    }
+
     KVCacheBlock::Ptr get_lru_block() {
-        if (!m_blocks.size()) {
+        if (!m_blocks_set.size()) {
             return nullptr;
         }
-        auto hash_block = std::min_element(std::begin(m_blocks), std::end(m_blocks), [](const auto& lhs, const auto& rhs) -> bool { return lhs.second->get_timestamp() < rhs.second->get_timestamp(); });
-        auto block = hash_block->second;
+
+        auto block_it = m_blocks_set.begin();
+        auto block = *block_it;
+        m_blocks_set.erase(block_it);
         block->set_timestamp(std::chrono::system_clock::now());
         block->increment();
-        m_blocks.erase(hash_block->first);
+        delete_trie(evictor_tree, block->get_content().data(), block->get_size());
         return block;
     }
 
     size_t num_blocks() const {
-        return m_blocks.size();
+        return m_blocks_set.size();
     }
 };
 
@@ -153,45 +122,52 @@ public:
         return allocated_block;
     }
 
-    KVCacheBlock::Ptr allocate_block(size_t hash, std::map<uint64_t, KVCacheBlock::Ptr>& cached_blocks) {
+    KVCacheBlock::Ptr allocate_block(TrieNode* prefix_tree, const ov::genai::TokenIds& prompt_ids, const ov::genai::TokenIds& generated_ids, size_t content_length = 0) {
         OPENVINO_ASSERT(m_enable_prefix_caching);
         OPENVINO_ASSERT(can_allocate_blocks(1));
         if (m_free_blocks.size() > 0) {
             // allocate new empty block
             KVCacheBlock::Ptr allocated_block = m_free_blocks.front();
             allocated_block->increment();
-            allocated_block->set_hash(hash);
-            cached_blocks[hash] = allocated_block;
-
+            allocated_block->prompt_ids = prompt_ids;
+            allocated_block->generated_ids = generated_ids;
+            insert_to_prefix_tree(prefix_tree, prompt_ids, generated_ids, allocated_block, content_length);
+            auto block = get_from_prefix_tree(prefix_tree, prompt_ids, generated_ids, content_length);
+            OPENVINO_ASSERT(block != nullptr);
             m_free_blocks.pop_front();
             return allocated_block;
         }
         if (m_evictor.num_blocks() > 0) {
             // get least resently used block from evictor and reuse it
             KVCacheBlock::Ptr block = m_evictor.get_lru_block();
-            cached_blocks.erase(block->get_hash());
 
             // update block with new hash
-            block->set_hash(hash);
-            cached_blocks[hash] = block;
+            block->prompt_ids = prompt_ids;
+            block->generated_ids = generated_ids;
+            delete_trie(prefix_tree, block->get_content().data(), block->get_size());
+            insert_to_prefix_tree(prefix_tree, prompt_ids, generated_ids, block, content_length);
             return block;
         }
         // out of memory
         return nullptr;
     }
 
-    KVCacheBlock::Ptr get_cached_block(size_t hash, std::map<uint64_t, KVCacheBlock::Ptr>& cached_blocks) {
-        auto block = m_evictor.get_block(hash);
+    KVCacheBlock::Ptr get_cached_block(TrieNode* tree, const ov::genai::TokenIds& prompt_ids, size_t content_len) {
+        auto block = m_evictor.get_block(prompt_ids, content_len);
         if (block != nullptr) {
             // use cashed block from evictor
+            auto block_t = get_from_prefix_tree(tree, prompt_ids, {}, content_len);
             return block;
         }
-        auto it = cached_blocks.find(hash);
-        if (it != cached_blocks.end()) {
-            // use cashed block from cached_blocks
-            // TODO: add tokens validation in case of hash collision
-            it->second->increment();
-            return it->second;
+        // use cashed block from cached_blocks
+        // TODO: add tokens validation in case of hash collision
+        //it->second->increment();
+        auto block_t = get_from_prefix_tree(tree, prompt_ids, {}, content_len);
+        if (block_t != nullptr) {
+
+            block_t->increment();
+
+            return block_t;
         }
         return nullptr;
     }
@@ -206,14 +182,16 @@ class BlockManager {
     bool m_enable_prefix_caching;
     size_t m_block_size;
     // TODO: caching time can probably be improved if we use the prefix tree
-    std::map<uint64_t, KVCacheBlock::Ptr> cached_blocks;
+    TrieNode* prefix_tree;
 
     // stores blocks for each sequence (not sequence group)
     // the same block can be seen in multiple block_tables for different sequences
     std::map<uint64_t, std::vector<KVCacheBlock::Ptr>> m_block_table;
 public:
     BlockManager(int num_blocks, bool enable_prefix_caching, size_t block_size)
-        : m_allocator(num_blocks, enable_prefix_caching), m_enable_prefix_caching(enable_prefix_caching), m_block_size(block_size) { }
+        : m_allocator(num_blocks, enable_prefix_caching), m_enable_prefix_caching(enable_prefix_caching), m_block_size(block_size) { 
+            prefix_tree = make_trienode('\0');
+        }
 
     ~BlockManager() {
         // sanity check that all sequences are freed
@@ -290,8 +268,7 @@ public:
                 if (num_hashed_tokens > content_length) {
                     num_hashed_tokens = content_length;
                 }
-                auto hash = sequence->get_hash(num_hashed_tokens);
-                block = m_allocator.allocate_block(hash, cached_blocks);
+                block = m_allocator.allocate_block(prefix_tree,  prompt_ids, sequence->get_generated_ids(), num_hashed_tokens);
             }
             else {
                 block = m_allocator.allocate_block();
@@ -428,9 +405,8 @@ public:
                     // we need to fork current block, because reference counter is more than 1
                     KVCacheBlock::Ptr new_block = nullptr;
                     if (m_enable_prefix_caching) {
-                        auto hash = sequence->get_hash();
-                        new_block = m_allocator.allocate_block(hash, cached_blocks);
-                        cached_blocks[hash] = new_block;
+                        new_block = m_allocator.allocate_block(prefix_tree, seq_group->get_prompt_ids(), sequence->get_generated_ids());
+                        insert_to_prefix_tree(prefix_tree, seq_group->get_prompt_ids(), sequence->get_generated_ids(), new_block);
                     }
                     else {
                         new_block = m_allocator.allocate_block();
@@ -444,11 +420,13 @@ public:
                     // we are the only users of this block
                     if (m_enable_prefix_caching) {
                         // update hash of block
-                        auto prev_hash = last_block->get_hash();
-                        auto hash = sequence->get_hash();
-                        last_block->set_hash(hash);
-                        cached_blocks.erase(prev_hash);
-                        cached_blocks[hash] = last_block;
+                        delete_trie(prefix_tree, last_block->get_content().data(), last_block->get_size());
+
+                        last_block->generated_ids = sequence->get_generated_ids();
+                        last_block->prompt_ids = seq_group->get_prompt_ids();
+                        insert_to_prefix_tree(prefix_tree, seq_group->get_prompt_ids(), sequence->get_generated_ids(), last_block);
+                        auto block_t = get_from_prefix_tree(prefix_tree, seq_group->get_prompt_ids(), sequence->get_generated_ids());
+                        OPENVINO_ASSERT(block_t != nullptr);
                     }
                 }
             }
@@ -475,8 +453,7 @@ public:
                 content_len = prompt_ids.size();
             }
             // restore fully filled blocks
-            auto full_block_hash = sequence->get_hash(content_len);
-            auto block = m_allocator.get_cached_block(full_block_hash, cached_blocks);
+            auto block = m_allocator.get_cached_block(prefix_tree, prompt_ids, content_len);
             if (block != nullptr) {
                 block->set_timestamp(std::chrono::system_clock::now());
                 m_block_table[seq_id].push_back(block);
@@ -488,18 +465,20 @@ public:
                     if (prev_iteration_content_len + i > prompt_ids.size()) {
                         break;
                     }
-                    auto hash = sequence->get_hash(prev_iteration_content_len + i);
-                    auto block = m_allocator.get_cached_block(hash, cached_blocks);
+                    auto block = m_allocator.get_cached_block(prefix_tree, prompt_ids, prev_iteration_content_len + i);
                     if (block != nullptr) {
                         block->set_timestamp(std::chrono::system_clock::now());
                         group->update_processed_tokens_num(prev_iteration_content_len + i);
 
                         size_t new_tokens_count_in_block = std::min(content_len, prev_iteration_content_len + block_size);
                         if (new_tokens_count_in_block > prev_iteration_content_len + i) {
-                            cached_blocks.erase(hash);
-                            auto new_hash = sequence->get_hash(new_tokens_count_in_block);
-                            block->set_hash(new_hash);
-                            cached_blocks[new_hash] = block;
+                            std::vector<int64_t> content;
+                            content.insert( content.end(), prompt_ids.begin(), prompt_ids.begin() + new_tokens_count_in_block);
+                            block->prompt_ids = content;
+                            block->generated_ids = {};
+
+                            delete_trie(prefix_tree, block->get_content().data(), block->get_size());
+                            insert_to_prefix_tree(prefix_tree, prompt_ids, {}, block, new_tokens_count_in_block);
                         }
                         m_block_table[seq_id].push_back(block);
 
