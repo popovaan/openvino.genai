@@ -335,6 +335,7 @@ public:
                 block = m_allocator.allocate_block();
             }
             OPENVINO_ASSERT(block != nullptr);
+            std::cout << "allocate " << sequence_id << std::endl;
             m_block_table[sequence_id].push_back(block);
         }
     }
@@ -348,6 +349,7 @@ public:
         m_block_table[child_id].reserve(m_block_table[parent_id].size());
         for (KVCacheBlock::Ptr & block : m_block_table[parent_id]) {
             block->increment();
+            std::cout << "fork " << child_id << std::endl;
             m_block_table[child_id].push_back(block);
         }
     }
@@ -460,6 +462,7 @@ public:
                 OPENVINO_ASSERT(can_allocate_blocks(num_logical_blocks - num_physical_blocks));
                 allocate(sequence, num_logical_blocks - num_physical_blocks, seq_group->get_prompt_ids());
             } else {
+                std::cout <<"id " << sequence->get_id() << std::endl;
                 OPENVINO_ASSERT(num_logical_blocks == num_physical_blocks, "A number of physical and logic blocks must be the same in this code path");
                 KVCacheBlock::Ptr last_block = block_table.back();
                 if (last_block->copy_on_write()) {
@@ -522,6 +525,7 @@ public:
             if (block != nullptr) {
                 block->set_timestamp(std::chrono::system_clock::now());
                 m_block_table[seq_id].push_back(block);
+                std::cout << "restore " <<std::to_string(seq_id);
                 group->update_processed_tokens_num(content_len == prompt_ids.size() ? content_len - 1 : content_len);
             }
             else {
@@ -536,6 +540,7 @@ public:
                         block->set_timestamp(std::chrono::system_clock::now());
                         group->update_processed_tokens_num(prev_iteration_content_len + i == prompt_ids.size() ? prev_iteration_content_len + i - 1 : prev_iteration_content_len + i);
                         m_block_table[seq_id].push_back(block);
+                        std::cout << "restore partially " <<std::to_string(seq_id);
 
                         break;
                     }
