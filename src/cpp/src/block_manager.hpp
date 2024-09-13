@@ -540,7 +540,7 @@ public:
                         block->set_timestamp(std::chrono::system_clock::now());
                         group->update_processed_tokens_num(prev_iteration_content_len + i == prompt_ids.size() ? prev_iteration_content_len + i - 1 : prev_iteration_content_len + i);
                         m_block_table[seq_id].push_back(block);
-                        std::cout << "restore partially " <<seq_id << std::endl;
+                        std::cout << "restore partially " <<seq_id << " " << prev_iteration_content_len + i << std::endl;
 
                         break;
                     }
