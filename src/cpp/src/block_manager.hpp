@@ -525,7 +525,7 @@ public:
             if (block != nullptr) {
                 block->set_timestamp(std::chrono::system_clock::now());
                 m_block_table[seq_id].push_back(block);
-                std::cout << "restore " <<std::to_string(seq_id);
+                std::cout << "restore " <<seq_id << " " << content_len << std::endl;
                 group->update_processed_tokens_num(content_len == prompt_ids.size() ? content_len - 1 : content_len);
             }
             else {
@@ -540,7 +540,7 @@ public:
                         block->set_timestamp(std::chrono::system_clock::now());
                         group->update_processed_tokens_num(prev_iteration_content_len + i == prompt_ids.size() ? prev_iteration_content_len + i - 1 : prev_iteration_content_len + i);
                         m_block_table[seq_id].push_back(block);
-                        std::cout << "restore partially " <<std::to_string(seq_id);
+                        std::cout << "restore partially " <<seq_id << std::endl;
 
                         break;
                     }
