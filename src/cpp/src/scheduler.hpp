@@ -222,8 +222,11 @@ private:
 
                 if (num_scheduled_tokens > 0) {
                     // allocate KV blocks if required
-                    if (num_scheduled_blocks > 0)
+                    if (num_scheduled_blocks > 0) {
+
+                    std::cout << "_schedule_prompt_phase_dynamic_split_fuse " << available_slots<< " " << num_required_blocks << " " << num_scheduled_blocks << " " << sequence_group->get_context_len() << " " << sequence_group->get_num_processed_tokens() <<std::endl;
                         m_block_manager.allocate(sequence, num_scheduled_blocks, sequence_group->get_prompt_ids());
+                    }
                     // and schedule tokens
                     sequence_group->schedule_tokens(num_scheduled_tokens);
 
@@ -274,7 +277,7 @@ private:
                     sequence_group->clear_scheduled_tokens();
                     continue;
                 }
-
+                std::cout << "_schedule_generate_phase_dynamic_split_fuse " << sequence_group->get_context_len() << " " << sequence_group->get_num_processed_tokens() << std::endl;
                 // allocate new slots
                 std::map<size_t, std::list<size_t>> copy_blocks_map = m_block_manager.append_slots(sequence_group);
 
