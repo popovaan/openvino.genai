@@ -343,6 +343,9 @@ public:
 
     // returns context length taking into account scheduled tokens
     size_t get_context_len() const {
+        if (has_finished()) {
+            std::cout << "10 " <<std::endl;
+        }
         OPENVINO_ASSERT(!has_finished());
         return get_num_processed_tokens() + get_num_scheduled_tokens();
     }
@@ -378,7 +381,7 @@ public:
         m_max_content_len = std::max(m_max_content_len, m_num_processed_tokens);
         clear_scheduled_tokens();
         for (auto seq: m_sequences) {
-            std::cout << "finish iteration " << seq->get_id() << " " << get_context_len() << std::endl;
+            std::cout << "finish iteration " << seq->get_id() << " " << get_num_processed_tokens() << " " << get_num_scheduled_tokens() << std::endl;
         }
     }
 
