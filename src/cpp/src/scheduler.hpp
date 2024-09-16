@@ -224,7 +224,7 @@ private:
                     // allocate KV blocks if required
                     if (num_scheduled_blocks > 0) {
 
-                    std::cout << "_schedule_prompt_phase_dynamic_split_fuse " << available_slots<< " " << num_required_blocks << " " << num_scheduled_blocks << " " << sequence_group->get_context_len() << " " << sequence_group->get_num_processed_tokens() <<std::endl;
+                    std::cout << "_schedule_prompt_phase_dynamic_split_fuse " << sequence_group->get_num_available_tokens_for_batching() << " " << sequence_group->get_prompt_len() << " " << available_slots<< " " << num_required_blocks << " " << num_scheduled_blocks << " " << sequence_group->get_context_len() << " " << sequence_group->get_num_processed_tokens() <<std::endl;
                         m_block_manager.allocate(sequence, num_scheduled_blocks, sequence_group->get_prompt_ids());
                     }
                     // and schedule tokens

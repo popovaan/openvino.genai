@@ -377,6 +377,9 @@ public:
         // if some processed tokens were evicted, max content len is greater than number of processed tokens
         m_max_content_len = std::max(m_max_content_len, m_num_processed_tokens);
         clear_scheduled_tokens();
+        for (auto seq: m_sequences) {
+            std::cout << "finish iteration " << seq->get_id() << " " << get_context_len() << std::endl;
+        }
     }
 
     void update_processed_tokens_num(size_t processed_tokens) {
