@@ -115,10 +115,14 @@ private:
             for (size_t s = 0; s < sequences.size(); ++s) {
                 auto seq_id = sequences[s]->get_id();
                 m_block_manager.free_sequence(seq_id);
+                std::cout <<"preempt fully " << seq_id << std::endl;
             }
             sequence_group->preempt_tokens(processed_tokens);
             sequence_group->set_waiting();
             return m_block_manager.num_free_blocks() > prev_blocks_count;
+        }
+        for (auto sequence: sequence_group->get_not_finished_sequences()) {
+            std::cout <<"preempt partially " << sequence->get_id() << std::endl;
         }
 
         size_t logical_blocks_released;

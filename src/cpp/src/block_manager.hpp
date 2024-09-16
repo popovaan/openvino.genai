@@ -335,6 +335,7 @@ public:
                 block = m_allocator.allocate_block();
             }
             OPENVINO_ASSERT(block != nullptr);
+            std::cout << "allocate " << sequence_id << std::endl;
             m_block_table[sequence_id].push_back(block);
         }
     }
@@ -349,6 +350,7 @@ public:
         for (KVCacheBlock::Ptr & block : m_block_table[parent_id]) {
             block->increment();
             m_block_table[child_id].push_back(block);
+            std::cout << "fork " << child_id << std::endl;
         }
     }
 
@@ -460,6 +462,8 @@ public:
                 OPENVINO_ASSERT(can_allocate_blocks(num_logical_blocks - num_physical_blocks));
                 allocate(sequence, num_logical_blocks - num_physical_blocks, seq_group->get_prompt_ids());
             } else {
+                std::cout << "context_len: " << seq_group->get_context_len() << " prompt_len: " << seq_group->get_prompt_len() <<std::endl;
+                std::cout << "id " << seq_id << std::endl;
                 OPENVINO_ASSERT(num_logical_blocks == num_physical_blocks, "A number of physical and logic blocks must be the same in this code path");
                 KVCacheBlock::Ptr last_block = block_table.back();
                 if (last_block->copy_on_write()) {
