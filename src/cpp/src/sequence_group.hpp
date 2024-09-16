@@ -343,9 +343,6 @@ public:
 
     // returns context length taking into account scheduled tokens
     size_t get_context_len() const {
-        if (has_finished()) {
-            std::cout << "10 " <<std::endl;
-        }
         OPENVINO_ASSERT(!has_finished());
         return get_num_processed_tokens() + get_num_scheduled_tokens();
     }
